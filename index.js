@@ -9,19 +9,23 @@ import path from 'path';
 const TASKS_DIR = path.join(process.cwd(), '_tasks');
 const CURRENT_LINK = path.join(TASKS_DIR, 'current');
 
-// Utility: Generate date suffix (YYYY-MM-DD, then YYYY-MM-DDb, YYYY-MM-DDc, ...)
+// Utility: Generate date suffix (YYYY-MM-DD, then YYYY-MM-DDb, ..., YYYY-MM-DDy, YYYY-MM-DDz026, ...)
 function getDateSuffix(index) {
   const date = new Date();
   const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
   if (index === 0) return dateStr;
-  // a=97, so index 1 -> 'b', index 2 -> 'c', etc.
-  return dateStr + String.fromCharCode(97 + index);
+  if (index <= 24) {
+    // index 1-24 -> 'b' through 'y' (tasks 2-25)
+    return dateStr + String.fromCharCode(97 + index);
+  }
+  // index 25+ -> 'z026', 'z027', etc. (task number = index + 1)
+  return dateStr + 'z' + String(index + 1).padStart(3, '0');
 }
 
 // Utility: Parse task directory name to extract date and slug
 function parseTaskDirName(dirName) {
-  // Pattern: YYYY-MM-DD[b-z]-slug or YYYY-MM-DD-slug
-  const match = dirName.match(/^(\d{4}-\d{2}-\d{2}[b-z]?)-(.+)$/);
+  // Pattern: YYYY-MM-DD[b-z|z\d{3}]-slug or YYYY-MM-DD-slug
+  const match = dirName.match(/^(\d{4}-\d{2}-\d{2}(?:[b-y]|z\d{3})?)-(.+)$/);
   if (!match) return null;
   return { datePrefix: match[1], slug: match[2] };
 }
@@ -116,8 +120,8 @@ async function findNextTaskDirName(slug) {
   const allDirs = await getAllTaskDirs();
   const today = new Date().toISOString().split('T')[0];
 
-  // Try without suffix first, then b, c, d, ..., z
-  for (let i = 0; i < 26; i++) {
+  // Try without suffix first, then b, c, d, ..., z, z026, z027, ..., z999
+  for (let i = 0; i < 1000; i++) {
     const datePrefix = getDateSuffix(i);
     if (!datePrefix.startsWith(today)) break; // Safety check
 
@@ -127,7 +131,7 @@ async function findNextTaskDirName(slug) {
     }
   }
 
-  throw new Error('Too many tasks for today (max 26)');
+  throw new Error('Too many tasks for today (max 1000)');
 }
 
 // Utility: Update current symlink

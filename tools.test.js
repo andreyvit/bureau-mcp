@@ -15,11 +15,14 @@ function getDateSuffix(index) {
   const date = new Date();
   const dateStr = date.toISOString().split('T')[0];
   if (index === 0) return dateStr;
-  return dateStr + String.fromCharCode(97 + index);
+  if (index <= 24) {
+    return dateStr + String.fromCharCode(97 + index);
+  }
+  return dateStr + 'z' + String(index + 1).padStart(3, '0');
 }
 
 function parseTaskDirName(dirName) {
-  const match = dirName.match(/^(\d{4}-\d{2}-\d{2}[b-z]?)-(.+)$/);
+  const match = dirName.match(/^(\d{4}-\d{2}-\d{2}(?:[b-y]|z\d{3})?)-(.+)$/);
   if (!match) return null;
   return { datePrefix: match[1], slug: match[2] };
 }
@@ -134,6 +137,31 @@ describe('Bureau MCP Tools', () => {
       const suffix = getDateSuffix(2);
       assert.match(suffix, /^\d{4}-\d{2}-\d{2}c$/);
     });
+
+    test('generates correct date suffix for 25th task (y)', () => {
+      const suffix = getDateSuffix(24);
+      assert.match(suffix, /^\d{4}-\d{2}-\d{2}y$/);
+    });
+
+    test('generates correct date suffix for 26th task (z026)', () => {
+      const suffix = getDateSuffix(25);
+      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z026$/);
+    });
+
+    test('generates correct date suffix for 27th task (z027)', () => {
+      const suffix = getDateSuffix(26);
+      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z027$/);
+    });
+
+    test('generates correct date suffix for 100th task (z100)', () => {
+      const suffix = getDateSuffix(99);
+      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z100$/);
+    });
+
+    test('generates correct date suffix for 1000th task (z1000)', () => {
+      const suffix = getDateSuffix(999);
+      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z1000$/);
+    });
   });
 
   describe('Task directory name parsing', () => {
@@ -150,6 +178,22 @@ describe('Bureau MCP Tools', () => {
       assert.deepEqual(result, {
         datePrefix: '2025-10-01b',
         slug: 'second-task'
+      });
+    });
+
+    test('parses task directory name with z026 format', () => {
+      const result = parseTaskDirName('2025-10-01z026-many-tasks');
+      assert.deepEqual(result, {
+        datePrefix: '2025-10-01z026',
+        slug: 'many-tasks'
+      });
+    });
+
+    test('parses task directory name with z999 format', () => {
+      const result = parseTaskDirName('2025-10-01z999-last-task');
+      assert.deepEqual(result, {
+        datePrefix: '2025-10-01z999',
+        slug: 'last-task'
       });
     });
 

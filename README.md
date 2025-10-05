@@ -179,7 +179,9 @@ Task directories follow the pattern: `YYYY-MM-DDn-slug-slug-slug`
 - First task of the day: `2025-10-01-first-task`
 - Second task same day: `2025-10-01b-second-task`
 - Third task same day: `2025-10-01c-third-task`
-- Up to 26 tasks per day (a-z)
+- ...continuing through `y`: `2025-10-01y-task-25`
+- 26th+ tasks use numeric suffix: `2025-10-01z026-task-26`, `2025-10-01z027-task-27`, etc.
+- Up to 1000 tasks per day
 
 ## Development
 
