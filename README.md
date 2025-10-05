@@ -4,25 +4,7 @@ A Model Context Protocol (MCP) server that helps AI agents reliably manage task-
 
 ## Why Bureau?
 
-AI agents struggle to maintain consistent file numbering and folder organization when managing multi-step tasks. They often:
-- Mess up sequential numbering
-- Switch to new folders unexpectedly
-- Lose track of which task is current
-
-Bureau solves this by managing the directory structure and file numbering, while letting agents focus on reading and writing content.
-
-## Features
-
-- **Automatic Task Directory Management** - Creates dated task folders with automatic suffix handling (2025-10-01, 2025-10-01b, 2025-10-01c, etc.)
-- **Sequential Report Numbering** - Generates next available report file numbers automatically
-- **Current Task Tracking** - Maintains a `current` symlink pointing to the active task
-- **Smart File Listing** - Returns all files if <50, or earliest 20 + latest 30 for efficiency
-- **Recent Tasks** - Lists tasks from the last 30 days
-- **Minimal Dependencies** - Built with only essential packages
-
-## Directory Structure
-
-Bureau creates and manages a `_tasks/` directory in your project:
+When using AI subagents for complex workflows, it's useful to have them maintain reports in a structured directory like this:
 
 ```
 _tasks/
@@ -39,6 +21,22 @@ _tasks/
     ├── 001-analysis.md
     └── 002-plan.md
 ```
+
+However, AI agents struggle to maintain consistent file numbering and folder organization when managing multi-step tasks. They often:
+- Mess up sequential numbering
+- Switch to new folders unexpectedly
+- Lose track of which task is current
+
+Bureau solves this by managing the directory structure and file numbering, while letting agents focus on reading and writing content.
+
+## Features
+
+- **Automatic Task Directory Management** - Creates dated task folders with automatic suffix handling (2025-10-01, 2025-10-01b, 2025-10-01c, etc.)
+- **Sequential Report Numbering** - Generates next available report file numbers automatically
+- **Current Task Tracking** - Maintains a `current` symlink pointing to the active task
+- **Smart File Listing** - Returns all files if <50, or earliest 20 + latest 30 for efficiency
+- **Recent Tasks** - Lists tasks from the last 30 days
+- **Minimal Dependencies** - Built with only essential packages
 
 ## Installation
 
