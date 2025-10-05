@@ -180,7 +180,7 @@ async function findTaskDirBySlug(slug) {
 // Create MCP server
 const server = new Server(
   {
-    name: 'bureaumcp',
+    name: 'bureau-mcp',
     version: '1.0.0'
   },
   {

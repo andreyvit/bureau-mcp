@@ -1,45 +1,214 @@
-# bureaumcp
+# Bureau MCP Server
 
-Bureau is an MCP server in Node.js using the minimum number of third-party dependencies (only whatever's necessary to implement MCP servers, don't use third-party test libs etc etc).
+A Model Context Protocol (MCP) server that helps AI agents reliably manage task-based report files with automatic sequential numbering and consistent directory organization.
 
-This server helps agents read and write report files with the following naming convention:
+## Why Bureau?
 
-```
-_tasks/2025-10-01-some-urgent-task/001-user-request.md
-_tasks/2025-10-01-some-urgent-task/002-plan.md
-_tasks/2025-10-01-some-urgent-task/003-plan-review.md
-_tasks/2025-10-01-some-urgent-task/004-tests.md
-...
-_tasks/2025-10-01-some-urgent-task/007-code-review.md
-_tasks/2025-10-01-some-urgent-task/008-plan.md
-_tasks/2025-10-01-some-urgent-task/009-user-revision.md
-...
-```
+AI agents struggle to maintain consistent file numbering and folder organization when managing multi-step tasks. They often:
+- Mess up sequential numbering
+- Switch to new folders unexpectedly
+- Lose track of which task is current
 
-You get the idea: we have a folder for a task, and within that folder, keep sequentially numbered files.
+Bureau solves this by managing the directory structure and file numbering, while letting agents focus on reading and writing content.
 
-The reason this MCP exists is because agents cannot do this reliably. They keep messing up the numbering or keep switching to new folders. We want agents to handle reading and writing of files themselves, they do this best; we'll just help them find those files.
+## Features
 
-Naming convention for task dirs: YYYY-MM-DDn-slug-slug-slug, where 'n' is empty for the first task of the day, and then goes b, c, ..., x, y, z. So e.g. 2025-10-01-first-task, then 2025-10-01b-second-task, 2025-10-01c-another-item, etc.
+- **Automatic Task Directory Management** - Creates dated task folders with automatic suffix handling (2025-10-01, 2025-10-01b, 2025-10-01c, etc.)
+- **Sequential Report Numbering** - Generates next available report file numbers automatically
+- **Current Task Tracking** - Maintains a `current` symlink pointing to the active task
+- **Smart File Listing** - Returns all files if <50, or earliest 20 + latest 30 for efficiency
+- **Recent Tasks** - Lists tasks from the last 30 days
+- **Minimal Dependencies** - Built with only essential packages
 
-_tasks/current symlink should be kept pointing to the current task, if any.
+## Directory Structure
 
-Tools:
+Bureau creates and manages a `_tasks/` directory in your project:
 
 ```
-// returns current task info; 'report_file_names' will contain all files if less than 50, or earliest 20 and latest 30 if over 50.
-current_task() -> {'task_slug': 'some-urgent-task', 'reports_dir': '_tasks/2025-10-01-some-urgent-task', 'report_file_names': ['001-user-request.md', '02-plan.md', '003-plan-review.md', '004-tests.md', '005-impl.md', '006-docs.md']}
-
-// creates a new task directory and points current to it; returns same data as current_task()
-start_new_task({'task_slug': 'some-urgent-task'}) -> {'task_slug': 'some-urgent-task', 'reports_dir': '_tasks/2025-10-01-some-urgent-task', 'report_file_names': []}
-// switches current to point to the given task; returns same data as current_task()
-switch_task({'task_slug': 'some-urgent-task'}) -> {'task_slug': 'some-urgent-task', 'reports_dir': '_tasks/2025-10-01-some-urgent-task', 'report_file_names': ['001-user-request.md', '02-plan.md', '003-plan-review.md', '004-tests.md', '005-impl.md', '006-docs.md']}
-
-// lists all task directories >= now minus 30 days (or now minus 1 month, or similar, whichever is easier to implement)
-list_recent_tasks() -> {"recent_task_slugs": ['prior-urgent-task', 'some-urgent-task']}
-
-// returns the name of the next sequentially numbered report file; the file will not exist
-start_new_report_file({'suffix': 'code-review'}) -> {'report_file_to_create': '_tasks/2025-10-01-some-urgent-task/007-code-review.md'}
+_tasks/
+├── current -> 2025-10-01-implement-feature
+├── 2025-10-01-implement-feature/
+│   ├── 001-user-request.md
+│   ├── 002-plan.md
+│   ├── 003-implementation.md
+│   └── 004-tests.md
+├── 2025-10-01b-fix-bug/
+│   ├── 001-bug-report.md
+│   └── 002-fix.md
+└── 2025-10-02-refactor/
+    ├── 001-analysis.md
+    └── 002-plan.md
 ```
 
-The agent is supposed to invoke current_task(), then read the report files it wants, then do its work, then call start_new_report_file() and write out the report to that file.
+## Installation
+
+### Using with Claude Code
+
+**Option 1: CLI (recommended)**
+```bash
+claude mcp add-json bureau '{"command":"npx","args":["-y","bureau-mcp"]}' --scope user
+```
+
+**Option 2: Manual configuration**
+
+Edit `~/.claude.json`:
+```json
+{
+  "mcpServers": {
+    "bureau": {
+      "command": "npx",
+      "args": ["-y", "bureau-mcp"]
+    }
+  }
+}
+```
+
+### Using with Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "bureau": {
+      "command": "npx",
+      "args": ["-y", "bureau-mcp"]
+    }
+  }
+}
+```
+
+### Local Development
+
+```bash
+git clone https://github.com/andreyvit/bureau-mcp.git
+cd bureau-mcp
+npm install
+```
+
+Then configure with the full path:
+```json
+{
+  "mcpServers": {
+    "bureau": {
+      "command": "node",
+      "args": ["/path/to/bureau-mcp/index.js"]
+    }
+  }
+}
+```
+
+## Available Tools
+
+### `current_task`
+Returns information about the current task.
+
+**Returns:**
+```json
+{
+  "task_slug": "implement-feature",
+  "reports_dir": "_tasks/2025-10-01-implement-feature",
+  "report_file_names": ["001-user-request.md", "002-plan.md"]
+}
+```
+
+### `start_new_task`
+Creates a new task directory and makes it current.
+
+**Parameters:**
+- `task_slug` (string): Slug for the task (e.g., "implement-feature")
+
+**Returns:** Same format as `current_task()`
+
+### `switch_task`
+Switches to an existing task by slug.
+
+**Parameters:**
+- `task_slug` (string): Slug of the task to switch to
+
+**Returns:** Same format as `current_task()`
+
+### `list_recent_tasks`
+Lists all tasks from the last 30 days.
+
+**Returns:**
+```json
+{
+  "recent_task_slugs": ["implement-feature", "fix-bug", "refactor"]
+}
+```
+
+### `start_new_report_file`
+Returns the name for the next sequentially numbered report file.
+
+**Parameters:**
+- `suffix` (string): Suffix for the report file (e.g., "code-review")
+
+**Returns:**
+```json
+{
+  "report_file_to_create": "_tasks/2025-10-01-implement-feature/003-code-review.md"
+}
+```
+
+## Typical Workflow
+
+1. **Agent starts a new task:**
+   - Calls `start_new_task({task_slug: "implement-feature"})`
+   - Gets back the task directory path
+
+2. **Agent creates initial report:**
+   - Calls `start_new_report_file({suffix: "user-request"})`
+   - Writes content to the returned filepath
+
+3. **Agent continues work:**
+   - Calls `current_task()` to see existing reports
+   - Reads report files as needed
+   - Calls `start_new_report_file()` for new reports
+   - Writes new content
+
+4. **Agent switches between tasks:**
+   - Calls `list_recent_tasks()` to see options
+   - Calls `switch_task({task_slug: "fix-bug"})` to change tasks
+
+## Task Directory Naming
+
+Task directories follow the pattern: `YYYY-MM-DDn-slug-slug-slug`
+
+- First task of the day: `2025-10-01-first-task`
+- Second task same day: `2025-10-01b-second-task`
+- Third task same day: `2025-10-01c-third-task`
+- Up to 26 tasks per day (a-z)
+
+## Development
+
+**Run tests:**
+```bash
+npm test
+```
+
+**Start server locally:**
+```bash
+npm start
+```
+
+The server uses Node.js built-in test runner and `memfs` for filesystem mocking in tests.
+
+## Requirements
+
+- Node.js >= 18.0.0
+
+## License
+
+MIT
+
+## Contributing
+
+Contributions welcome! Please open an issue or submit a pull request.
+
+## Repository
+
+https://github.com/andreyvit/bureau-mcp

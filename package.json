@@ -1,16 +1,37 @@
 {
-  "name": "bureaumcp",
+  "name": "bureau-mcp",
   "version": "1.0.0",
-  "description": "Bureau is an MCP server for storing user requests and subagent reports",
+  "description": "MCP server that helps AI agents reliably manage task-based report files with automatic sequential numbering",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "bureau-mcp": "index.js"
+  },
   "scripts": {
     "test": "node --test",
     "start": "node index.js"
   },
-  "keywords": ["mcp", "model-context-protocol", "task-management"],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "task-management",
+    "ai-agents",
+    "workflow",
+    "reports",
+    "automation",
+    "claude",
+    "mcp-server"
+  ],
+  "author": "Andrey Tarantsov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andreyvit/bureau-mcp.git"
+  },
+  "homepage": "https://github.com/andreyvit/bureau-mcp",
+  "bugs": {
+    "url": "https://github.com/andreyvit/bureau-mcp/issues"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
