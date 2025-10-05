@@ -67,7 +67,7 @@ async function getReportFiles(taskPath, fsImpl) {
   try {
     const entries = await fsImpl.readdir(taskPath);
     const reportFiles = entries
-      .filter(name => /^\d{3}-.*\.md$/.test(name))
+      .filter(name => /^\d+-.*\.md$/.test(name))
       .sort();
 
     if (reportFiles.length <= 50) {
@@ -89,7 +89,7 @@ async function findNextReportNumber(taskPath, fsImpl) {
   }
 
   const numbers = reportFiles.map(name => {
-    const match = name.match(/^(\d{3})-/);
+    const match = name.match(/^(\d+)-/);
     return match ? parseInt(match[1], 10) : 0;
   });
 
@@ -358,6 +358,32 @@ describe('Bureau MCP Tools', () => {
 
       const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
       assert.equal(nextNumber, 6);
+    });
+
+    test('handles agent-written files with non-standard numbering', async () => {
+      vol.fromJSON({
+        '/_tasks/2025-10-01-my-task/001-foo.md': 'content',
+        '/_tasks/2025-10-01-my-task/002-bar.md': 'content',
+        '/_tasks/2025-10-01-my-task/42-boz.md': 'agent cheated and wrote this'
+      });
+
+      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
+      assert.equal(nextNumber, 43);
+    });
+
+    test('accepts variable-length numeric prefixes', async () => {
+      vol.fromJSON({
+        '/_tasks/2025-10-01-my-task/1-first.md': 'content',
+        '/_tasks/2025-10-01-my-task/11-eleventh.md': 'content',
+        '/_tasks/2025-10-01-my-task/100-hundredth.md': 'content'
+      });
+
+      const reportFiles = await getReportFiles('/_tasks/2025-10-01-my-task', memoryFs.promises);
+      // Files are sorted alphabetically, so '100' comes before '11'
+      assert.deepEqual(reportFiles, ['1-first.md', '100-hundredth.md', '11-eleventh.md']);
+
+      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
+      assert.equal(nextNumber, 101);
     });
   });
 

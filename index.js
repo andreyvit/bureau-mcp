@@ -78,9 +78,9 @@ async function getReportFiles(taskDir) {
   const taskPath = path.join(TASKS_DIR, taskDir);
   try {
     const entries = await fs.readdir(taskPath);
-    // Filter for numbered markdown files (e.g., 001-*.md, 002-*.md)
+    // Filter for numbered markdown files (e.g., 001-*.md, 11-*.md, 042-*.md)
     const reportFiles = entries
-      .filter(name => /^\d{3}-.*\.md$/.test(name))
+      .filter(name => /^\d+-.*\.md$/.test(name))
       .sort();
 
     // Return all if <50, or earliest 20 + latest 30
@@ -158,7 +158,7 @@ async function findNextReportNumber(taskDir) {
 
   // Extract numbers from all report files
   const numbers = reportFiles.map(name => {
-    const match = name.match(/^(\d{3})-/);
+    const match = name.match(/^(\d+)-/);
     return match ? parseInt(match[1], 10) : 0;
   });
 
