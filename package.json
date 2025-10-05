@@ -1,0 +1,23 @@
+{
+  "name": "bureaumcp",
+  "version": "1.0.0",
+  "description": "Bureau is an MCP server for storing user requests and subagent reports",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test",
+    "start": "node index.js"
+  },
+  "keywords": ["mcp", "model-context-protocol", "task-management"],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "memfs": "^4.0.0"
+  }
+}
