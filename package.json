@@ -1,6 +1,6 @@
 {
   "name": "bureau-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server that helps AI agents reliably manage task-based report files with automatic sequential numbering",
   "type": "module",
   "main": "index.js",
