@@ -1,417 +1,370 @@
-import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { vol } from 'memfs';
-import fs from 'fs/promises';
+import { beforeEach, describe, test } from 'node:test';
+import { createFsFromVolume, vol } from 'memfs';
+import {
+  createBureauContext,
+  detectDefaultBureauDir,
+  findNextReportNumber,
+  findNextTaskDirName,
+  formatLocalDate,
+  getCurrentTaskDir,
+  getDateSuffix,
+  getRecentTaskDirs,
+  getReportFiles,
+  getTaskInfo,
+  newReportFileName,
+  parseTaskDirName,
+  resolveBureauContext
+} from './bureau.js';
+import { handleToolCall } from './index.js';
 
-// Mock the fs module with memfs
-import { createFsFromVolume } from 'memfs';
 const memoryFs = createFsFromVolume(vol);
+const cwd = '/workspace';
 
-// We need to import the utilities from index.js, but since it's a server file,
-// we'll test the logic by simulating the tool handlers
-
-// Utility functions extracted for testing (copy from index.js)
-function getDateSuffix(index) {
-  const date = new Date();
-  const dateStr = date.toISOString().split('T')[0];
-  if (index === 0) return dateStr;
-  if (index <= 24) {
-    return dateStr + String.fromCharCode(97 + index);
-  }
-  return dateStr + 'z' + String(index + 1).padStart(3, '0');
+function toolOptions(overrides = {}) {
+  return {
+    cwd,
+    env: {},
+    fsImpl: memoryFs.promises,
+    ...overrides
+  };
 }
 
-function parseTaskDirName(dirName) {
-  const match = dirName.match(/^(\d{4}-\d{2}-\d{2}(?:[b-y]|z\d{3})?)-(.+)$/);
-  if (!match) return null;
-  return { datePrefix: match[1], slug: match[2] };
+function parseResponse(response) {
+  return JSON.parse(response.content[0].text);
 }
 
-async function getAllTaskDirs(tasksDir, fsImpl) {
-  try {
-    await fsImpl.mkdir(tasksDir, { recursive: true });
-    const entries = await fsImpl.readdir(tasksDir, { withFileTypes: true });
-    return entries
-      .filter(entry => entry.isDirectory() && parseTaskDirName(entry.name))
-      .map(entry => entry.name)
-      .sort();
-  } catch (error) {
-    return [];
-  }
-}
+function buildDailyTaskFiles(bureauDir, startDate, count) {
+  const files = {};
+  const taskDirs = [];
+  const date = new Date(startDate);
 
-async function getRecentTaskDirs(tasksDir, fsImpl) {
-  const allDirs = await getAllTaskDirs(tasksDir, fsImpl);
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  const cutoffStr = thirtyDaysAgo.toISOString().split('T')[0];
-
-  return allDirs.filter(dirName => {
-    const parsed = parseTaskDirName(dirName);
-    if (!parsed) return false;
-    const dateOnly = parsed.datePrefix.replace(/[b-z]$/, '');
-    return dateOnly >= cutoffStr;
-  });
-}
-
-async function getCurrentTaskDir(currentLink, fsImpl) {
-  try {
-    const target = await fsImpl.readlink(currentLink);
-    return target;
-  } catch (error) {
-    return null;
-  }
-}
-
-async function getReportFiles(taskPath, fsImpl) {
-  try {
-    const entries = await fsImpl.readdir(taskPath);
-    const reportFiles = entries
-      .filter(name => /^\d+-.*\.md$/.test(name))
-      .sort();
-
-    if (reportFiles.length <= 50) {
-      return reportFiles;
-    }
-    return [
-      ...reportFiles.slice(0, 20),
-      ...reportFiles.slice(-30)
-    ];
-  } catch (error) {
-    return [];
-  }
-}
-
-async function findNextReportNumber(taskPath, fsImpl) {
-  const reportFiles = await getReportFiles(taskPath, fsImpl);
-  if (reportFiles.length === 0) {
-    return 1;
+  for (let index = 0; index < count; index += 1) {
+    const taskDir = `${formatLocalDate(date)}-task-${index + 1}`;
+    files[`${cwd}/${bureauDir}/${taskDir}/.keep`] = '';
+    taskDirs.push(taskDir);
+    date.setDate(date.getDate() + 1);
   }
 
-  const numbers = reportFiles.map(name => {
-    const match = name.match(/^(\d+)-/);
-    return match ? parseInt(match[1], 10) : 0;
-  });
-
-  const maxNumber = Math.max(...numbers);
-  return maxNumber + 1;
+  return { files, taskDirs };
 }
 
-async function findTaskDirBySlug(slug, tasksDir, fsImpl) {
-  const allDirs = await getAllTaskDirs(tasksDir, fsImpl);
+beforeEach(() => {
+  vol.reset();
+});
 
-  for (let i = allDirs.length - 1; i >= 0; i--) {
-    const parsed = parseTaskDirName(allDirs[i]);
-    if (parsed && parsed.slug === slug) {
-      return allDirs[i];
-    }
-  }
+describe('Bureau core logic', () => {
+  describe('date suffix generation', () => {
+    const sampleDate = new Date(2025, 9, 1, 12, 0, 0);
 
-  return null;
-}
-
-describe('Bureau MCP Tools', () => {
-  const TASKS_DIR = '/_tasks';
-  const CURRENT_LINK = '/_tasks/current';
-
-  beforeEach(() => {
-    vol.reset();
-  });
-
-  afterEach(() => {
-    vol.reset();
-  });
-
-  describe('Date suffix generation', () => {
-    test('generates correct date suffix for first task', () => {
-      const suffix = getDateSuffix(0);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}$/);
+    test('uses local dates', () => {
+      assert.equal(formatLocalDate(sampleDate), '2025-10-01');
+      assert.equal(getDateSuffix(0, sampleDate), '2025-10-01');
     });
 
-    test('generates correct date suffix for second task', () => {
-      const suffix = getDateSuffix(1);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}b$/);
+    test('uses b through y for same-day tasks 2 through 25', () => {
+      assert.equal(getDateSuffix(1, sampleDate), '2025-10-01b');
+      assert.equal(getDateSuffix(24, sampleDate), '2025-10-01y');
     });
 
-    test('generates correct date suffix for third task', () => {
-      const suffix = getDateSuffix(2);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}c$/);
-    });
-
-    test('generates correct date suffix for 25th task (y)', () => {
-      const suffix = getDateSuffix(24);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}y$/);
-    });
-
-    test('generates correct date suffix for 26th task (z026)', () => {
-      const suffix = getDateSuffix(25);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z026$/);
-    });
-
-    test('generates correct date suffix for 27th task (z027)', () => {
-      const suffix = getDateSuffix(26);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z027$/);
-    });
-
-    test('generates correct date suffix for 100th task (z100)', () => {
-      const suffix = getDateSuffix(99);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z100$/);
-    });
-
-    test('generates correct date suffix for 1000th task (z1000)', () => {
-      const suffix = getDateSuffix(999);
-      assert.match(suffix, /^\d{4}-\d{2}-\d{2}z1000$/);
+    test('uses zNNN suffixes after y', () => {
+      assert.equal(getDateSuffix(25, sampleDate), '2025-10-01z026');
+      assert.equal(getDateSuffix(999, sampleDate), '2025-10-01z1000');
     });
   });
 
-  describe('Task directory name parsing', () => {
-    test('parses simple task directory name', () => {
-      const result = parseTaskDirName('2025-10-01-some-urgent-task');
-      assert.deepEqual(result, {
+  describe('task directory parsing', () => {
+    test('parses plain and suffixed task directory names', () => {
+      assert.deepEqual(parseTaskDirName('2025-10-01-some-task'), {
         datePrefix: '2025-10-01',
-        slug: 'some-urgent-task'
+        slug: 'some-task'
       });
-    });
-
-    test('parses task directory name with suffix', () => {
-      const result = parseTaskDirName('2025-10-01b-second-task');
-      assert.deepEqual(result, {
+      assert.deepEqual(parseTaskDirName('2025-10-01b-second-task'), {
         datePrefix: '2025-10-01b',
         slug: 'second-task'
       });
     });
 
-    test('parses task directory name with z026 format', () => {
-      const result = parseTaskDirName('2025-10-01z026-many-tasks');
-      assert.deepEqual(result, {
+    test('accepts z-style suffixes with more than three digits', () => {
+      assert.deepEqual(parseTaskDirName('2025-10-01z026-many-tasks'), {
         datePrefix: '2025-10-01z026',
         slug: 'many-tasks'
       });
-    });
-
-    test('parses task directory name with z999 format', () => {
-      const result = parseTaskDirName('2025-10-01z999-last-task');
-      assert.deepEqual(result, {
-        datePrefix: '2025-10-01z999',
+      assert.deepEqual(parseTaskDirName('2025-10-01z1000-last-task'), {
+        datePrefix: '2025-10-01z1000',
         slug: 'last-task'
       });
     });
 
-    test('returns null for invalid format', () => {
-      const result = parseTaskDirName('invalid-name');
-      assert.equal(result, null);
+    test('rejects invalid task directory names', () => {
+      assert.equal(parseTaskDirName('not-a-task'), null);
     });
   });
 
-  describe('current_task tool', () => {
-    test('returns null when no current task exists', async () => {
-      vol.fromJSON({
-        '/_tasks/.keep': ''
-      });
-
-      const taskDir = await getCurrentTaskDir(CURRENT_LINK, memoryFs.promises);
-      assert.equal(taskDir, null);
+  describe('bureau dir detection', () => {
+    test('defaults to .tasks when no bureau dir exists', async () => {
+      assert.equal(await detectDefaultBureauDir({ cwd, fsImpl: memoryFs.promises }), '.tasks');
     });
 
-    test('returns task info when current task exists', async () => {
+    test('prefers the highest-scoring existing bureau dir', async () => {
       vol.fromJSON({
-        '/_tasks/2025-10-01-test-task/001-user-request.md': 'content',
-        '/_tasks/2025-10-01-test-task/002-plan.md': 'content'
+        '/workspace/.tasks/.keep': '',
+        '/workspace/_tasks/2025-10-01-existing/.keep': ''
+      });
+      await memoryFs.promises.symlink('2025-10-01-existing', '/workspace/_tasks/current');
+
+      assert.equal(await detectDefaultBureauDir({ cwd, fsImpl: memoryFs.promises }), '_tasks');
+    });
+
+    test('honors BUREAU_DIR overrides', async () => {
+      const context = await resolveBureauContext({
+        cwd,
+        env: { BUREAU_DIR: '/custom/tasks/' },
+        fsImpl: memoryFs.promises
       });
 
-      // Create symlink
-      await memoryFs.promises.symlink('2025-10-01-test-task', CURRENT_LINK);
-
-      const taskDir = await getCurrentTaskDir(CURRENT_LINK, memoryFs.promises);
-      assert.equal(taskDir, '2025-10-01-test-task');
-
-      const parsed = parseTaskDirName(taskDir);
-      assert.equal(parsed.slug, 'test-task');
-
-      const reportFiles = await getReportFiles('/_tasks/2025-10-01-test-task', memoryFs.promises);
-      assert.deepEqual(reportFiles, ['001-user-request.md', '002-plan.md']);
+      assert.equal(context.bureauDir, '/custom/tasks');
+      assert.equal(context.bureauDirPath, '/custom/tasks');
     });
   });
 
-  describe('start_new_task tool', () => {
-    test('creates first task of the day', async () => {
-      vol.fromJSON({ '/_tasks/.keep': '' });
-
-      const today = new Date().toISOString().split('T')[0];
-      const expectedDir = `${today}-my-task`;
-
-      await memoryFs.promises.mkdir(`/_tasks/${expectedDir}`, { recursive: true });
-      await memoryFs.promises.symlink(expectedDir, CURRENT_LINK);
-
-      const taskDir = await getCurrentTaskDir(CURRENT_LINK, memoryFs.promises);
-      assert.equal(taskDir, expectedDir);
-    });
-
-    test('creates second task of the day with suffix', async () => {
-      const today = new Date().toISOString().split('T')[0];
+  describe('task and report numbering', () => {
+    test('allocates new same-day task suffixes by date prefix, not by slug', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '.tasks' });
+      const sampleDate = new Date(2025, 9, 1, 12, 0, 0);
 
       vol.fromJSON({
-        [`/_tasks/${today}-first-task/.keep`]: '',
-        [`/_tasks/${today}b-second-task/.keep`]: ''
+        '/workspace/.tasks/2025-10-01-first-task/.keep': ''
       });
 
-      const allDirs = await getAllTaskDirs(TASKS_DIR, memoryFs.promises);
-      assert.deepEqual(allDirs, [`${today}-first-task`, `${today}b-second-task`]);
-    });
-  });
-
-  describe('switch_task tool', () => {
-    test('switches to existing task', async () => {
-      vol.fromJSON({
-        '/_tasks/2025-10-01-task-one/.keep': '',
-        '/_tasks/2025-10-01b-task-two/.keep': ''
-      });
-
-      await memoryFs.promises.symlink('2025-10-01-task-one', CURRENT_LINK);
-
-      let currentDir = await getCurrentTaskDir(CURRENT_LINK, memoryFs.promises);
-      assert.equal(currentDir, '2025-10-01-task-one');
-
-      // Switch to second task
-      await memoryFs.promises.unlink(CURRENT_LINK);
-      await memoryFs.promises.symlink('2025-10-01b-task-two', CURRENT_LINK);
-
-      currentDir = await getCurrentTaskDir(CURRENT_LINK, memoryFs.promises);
-      assert.equal(currentDir, '2025-10-01b-task-two');
+      assert.equal(
+        await findNextTaskDirName(context, 'second-task', memoryFs.promises, sampleDate),
+        '2025-10-01b-second-task'
+      );
     });
 
-    test('finds task by slug', async () => {
-      vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/.keep': '',
-        '/_tasks/2025-10-02-another-task/.keep': ''
-      });
-
-      const taskDir = await findTaskDirBySlug('my-task', TASKS_DIR, memoryFs.promises);
-      assert.equal(taskDir, '2025-10-01-my-task');
-    });
-
-    test('returns null for non-existent task', async () => {
-      vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/.keep': ''
-      });
-
-      const taskDir = await findTaskDirBySlug('non-existent', TASKS_DIR, memoryFs.promises);
-      assert.equal(taskDir, null);
-    });
-  });
-
-  describe('list_recent_tasks tool', () => {
-    test('returns empty list when no tasks exist', async () => {
-      vol.fromJSON({ '/_tasks/.keep': '' });
-
-      const recentDirs = await getRecentTaskDirs(TASKS_DIR, memoryFs.promises);
-      assert.deepEqual(recentDirs, []);
-    });
-
-    test('returns tasks from last 30 days', async () => {
-      const today = new Date();
-      const recent = new Date(today);
-      recent.setDate(recent.getDate() - 10);
-      const old = new Date(today);
-      old.setDate(old.getDate() - 40);
-
-      const recentDate = recent.toISOString().split('T')[0];
-      const oldDate = old.toISOString().split('T')[0];
+    test('normalizes current symlink targets to a task dir basename', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '.tasks' });
 
       vol.fromJSON({
-        [`/_tasks/${recentDate}-recent-task/.keep`]: '',
-        [`/_tasks/${oldDate}-old-task/.keep`]: ''
+        '/workspace/.tasks/2025-10-01-task/.keep': ''
       });
+      await memoryFs.promises.symlink('../.tasks/2025-10-01-task/', '/workspace/.tasks/current');
 
-      const recentDirs = await getRecentTaskDirs(TASKS_DIR, memoryFs.promises);
-      assert.equal(recentDirs.length, 1);
-      assert.equal(recentDirs[0], `${recentDate}-recent-task`);
+      assert.equal(await getCurrentTaskDir(context, memoryFs.promises), '2025-10-01-task');
     });
-  });
 
-  describe('start_new_report_file tool', () => {
-    test('generates first report file number', async () => {
+    test('sorts report files numerically and includes numbered non-markdown files', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '.tasks' });
+
       vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/.keep': ''
+        '/workspace/.tasks/2025-10-01-task/1-first.md': '',
+        '/workspace/.tasks/2025-10-01-task/11-eleventh.txt': '',
+        '/workspace/.tasks/2025-10-01-task/100-hundredth.md': '',
+        '/workspace/.tasks/2025-10-01-task/notes.md': ''
       });
 
-      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(nextNumber, 1);
+      assert.deepEqual(
+        await getReportFiles(context, '2025-10-01-task', memoryFs.promises),
+        ['1-first.md', '11-eleventh.txt', '100-hundredth.md']
+      );
     });
 
-    test('generates sequential report file numbers', async () => {
+    test('uses the highest numeric prefix when choosing the next report number', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '.tasks' });
+
       vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/001-start.md': 'content',
-        '/_tasks/2025-10-01-my-task/002-plan.md': 'content',
-        '/_tasks/2025-10-01-my-task/003-review.md': 'content'
+        '/workspace/.tasks/2025-10-01-task/001-start.md': '',
+        '/workspace/.tasks/2025-10-01-task/042-review.txt': '',
+        '/workspace/.tasks/2025-10-01-task/005-plan.md': ''
       });
 
-      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(nextNumber, 4);
+      assert.equal(await findNextReportNumber(context, '2025-10-01-task', memoryFs.promises), 43);
+      assert.equal(newReportFileName(43, 'implementation'), '043-implementation.md');
     });
 
-    test('handles gaps in numbering', async () => {
-      vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/001-start.md': 'content',
-        '/_tasks/2025-10-01-my-task/005-review.md': 'content'
-      });
-
-      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(nextNumber, 6);
-    });
-
-    test('handles agent-written files with non-standard numbering', async () => {
-      vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/001-foo.md': 'content',
-        '/_tasks/2025-10-01-my-task/002-bar.md': 'content',
-        '/_tasks/2025-10-01-my-task/42-boz.md': 'agent cheated and wrote this'
-      });
-
-      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(nextNumber, 43);
-    });
-
-    test('accepts variable-length numeric prefixes', async () => {
-      vol.fromJSON({
-        '/_tasks/2025-10-01-my-task/1-first.md': 'content',
-        '/_tasks/2025-10-01-my-task/11-eleventh.md': 'content',
-        '/_tasks/2025-10-01-my-task/100-hundredth.md': 'content'
-      });
-
-      const reportFiles = await getReportFiles('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      // Files are sorted alphabetically, so '100' comes before '11'
-      assert.deepEqual(reportFiles, ['1-first.md', '100-hundredth.md', '11-eleventh.md']);
-
-      const nextNumber = await findNextReportNumber('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(nextNumber, 101);
-    });
-  });
-
-  describe('Report file filtering', () => {
-    test('returns all files when less than 50', async () => {
-      const files = {};
-      for (let i = 1; i <= 30; i++) {
-        files[`/_tasks/2025-10-01-my-task/${String(i).padStart(3, '0')}-file.md`] = 'content';
-      }
+    test('returns all tasks from the last 60 days when that already yields at least 30 tasks', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '_tasks' });
+      const now = new Date(2025, 2, 31, 12, 0, 0);
+      const { files, taskDirs } = buildDailyTaskFiles('_tasks', new Date(2025, 1, 1, 12, 0, 0), 35);
       vol.fromJSON(files);
 
-      const reportFiles = await getReportFiles('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(reportFiles.length, 30);
+      assert.deepEqual(await getRecentTaskDirs(context, memoryFs.promises, now), taskDirs);
     });
 
-    test('returns earliest 20 and latest 30 when over 50 files', async () => {
-      const files = {};
-      for (let i = 1; i <= 100; i++) {
-        files[`/_tasks/2025-10-01-my-task/${String(i).padStart(3, '0')}-file.md`] = 'content';
-      }
+    test('backfills older tasks until at least 30 are returned when the last 60 days contain fewer', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '_tasks' });
+      const now = new Date(2025, 3, 15, 12, 0, 0);
+      const { files, taskDirs } = buildDailyTaskFiles('_tasks', new Date(2025, 0, 1, 12, 0, 0), 40);
       vol.fromJSON(files);
 
-      const reportFiles = await getReportFiles('/_tasks/2025-10-01-my-task', memoryFs.promises);
-      assert.equal(reportFiles.length, 50);
-      assert.equal(reportFiles[0], '001-file.md');
-      assert.equal(reportFiles[19], '020-file.md');
-      assert.equal(reportFiles[20], '071-file.md');
-      assert.equal(reportFiles[49], '100-file.md');
+      assert.deepEqual(
+        await getRecentTaskDirs(context, memoryFs.promises, now),
+        taskDirs.slice(-30)
+      );
     });
+
+    test('reports task info using the resolved bureau dir path', async () => {
+      const context = createBureauContext({ cwd, bureauDir: '.tasks' });
+
+      vol.fromJSON({
+        '/workspace/.tasks/2025-10-01-task/001-user-request.md': ''
+      });
+
+      assert.deepEqual(await getTaskInfo(context, '2025-10-01-task', memoryFs.promises), {
+        task_dir: '2025-10-01-task',
+        task_slug: 'task',
+        reports_dir: '.tasks/2025-10-01-task',
+        report_file_names: ['001-user-request.md']
+      });
+    });
+  });
+});
+
+describe('Bureau MCP tools', () => {
+  test('current_task returns a non-error payload when no current task exists', async () => {
+    const response = await handleToolCall('current_task', {}, toolOptions());
+    assert.deepEqual(parseResponse(response), { error: 'No current task' });
+    assert.equal(response.isError, undefined);
+  });
+
+  test('current_task returns task info when a current task exists', async () => {
+    vol.fromJSON({
+      '/workspace/_tasks/2025-10-02-refactor-something/001-user-request.md': '',
+      '/workspace/_tasks/2025-10-02-refactor-something/002-plan.md': '',
+      '/workspace/_tasks/2025-10-02-refactor-something/003-implementation.md': '',
+      '/workspace/_tasks/2025-10-02-refactor-something/004-tests.md': ''
+    });
+    await memoryFs.promises.symlink('2025-10-02-refactor-something', '/workspace/_tasks/current');
+
+    const response = await handleToolCall('current_task', {}, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.deepEqual(payload, {
+      task_dir: '2025-10-02-refactor-something',
+      task_slug: 'refactor-something',
+      reports_dir: '_tasks/2025-10-02-refactor-something',
+      report_file_names: [
+        '001-user-request.md',
+        '002-plan.md',
+        '003-implementation.md',
+        '004-tests.md'
+      ]
+    });
+  });
+
+  test('start_new_task creates .tasks by default and updates current', async () => {
+    const response = await handleToolCall('start_new_task', { task_slug: 'first-task' }, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.equal(payload.task_slug, 'first-task');
+    assert.match(payload.task_dir, /^\d{4}-\d{2}-\d{2}-first-task$/);
+    assert.equal(payload.reports_dir, `.tasks/${payload.task_dir}`);
+    assert.equal(await memoryFs.promises.readlink('/workspace/.tasks/current'), payload.task_dir);
+  });
+
+  test('start_new_task uses an existing .tasks directory when present', async () => {
+    vol.fromJSON({
+      '/workspace/.tasks/.keep': ''
+    });
+
+    const response = await handleToolCall('start_new_task', { task_slug: 'first-task' }, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.equal(payload.reports_dir, `.tasks/${payload.task_dir}`);
+    assert.equal(await memoryFs.promises.readlink('/workspace/.tasks/current'), payload.task_dir);
+    await assert.rejects(memoryFs.promises.stat('/workspace/_tasks'));
+  });
+
+  test('start_new_task uses the next same-day suffix when today already has a task', async () => {
+    const today = formatLocalDate();
+
+    vol.fromJSON({
+      [`/workspace/.tasks/${today}-first-task/.keep`]: ''
+    });
+
+    const response = await handleToolCall('start_new_task', { task_slug: 'second-task' }, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.equal(payload.task_dir, `${today}b-second-task`);
+    assert.equal(await memoryFs.promises.readlink('/workspace/.tasks/current'), `${today}b-second-task`);
+  });
+
+  test('switch_task accepts a full task_dir', async () => {
+    vol.fromJSON({
+      '/workspace/_tasks/2025-10-01-task-one/.keep': '',
+      '/workspace/_tasks/2025-10-01b-task-two/.keep': ''
+    });
+    await memoryFs.promises.symlink('2025-10-01-task-one', '/workspace/_tasks/current');
+
+    const response = await handleToolCall('switch_task', { task_dir: '2025-10-01b-task-two' }, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.equal(payload.task_slug, 'task-two');
+    assert.equal(await memoryFs.promises.readlink('/workspace/_tasks/current'), '2025-10-01b-task-two');
+  });
+
+  test('switch_task still supports switching by slug', async () => {
+    vol.fromJSON({
+      '/workspace/_tasks/2025-10-01-task-one/.keep': '',
+      '/workspace/_tasks/2025-10-02-task-one/.keep': '',
+      '/workspace/_tasks/2025-10-03-task-two/.keep': ''
+    });
+
+    const response = await handleToolCall('switch_task', { task_slug: 'task-one' }, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.equal(payload.task_dir, '2025-10-02-task-one');
+    assert.equal(await memoryFs.promises.readlink('/workspace/_tasks/current'), '2025-10-02-task-one');
+  });
+
+  test('list_recent_tasks backfills to 30 task dirs when fewer than 30 fall within 60 days', async () => {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 109);
+    const { files, taskDirs } = buildDailyTaskFiles('_tasks', startDate, 40);
+    vol.fromJSON(files);
+
+    const response = await handleToolCall('list_recent_tasks', {}, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.deepEqual(payload.recent_task_dirs, taskDirs.slice(-30));
+    assert.deepEqual(
+      payload.recent_task_slugs,
+      taskDirs.slice(-30).map(taskDir => parseTaskDirName(taskDir).slug)
+    );
+  });
+
+  test('start_new_report_file returns a path in the detected bureau dir without creating the file', async () => {
+    vol.fromJSON({
+      '/workspace/.tasks/2025-10-01-task/001-user-request.md': '',
+      '/workspace/.tasks/2025-10-01-task/002-plan.md': ''
+    });
+    await memoryFs.promises.symlink('2025-10-01-task', '/workspace/.tasks/current');
+
+    const response = await handleToolCall('start_new_report_file', { suffix: 'tests' }, toolOptions());
+    const payload = parseResponse(response);
+
+    assert.equal(payload.report_file_to_create, '.tasks/2025-10-01-task/003-tests.md');
+    await assert.rejects(memoryFs.promises.stat('/workspace/.tasks/2025-10-01-task/003-tests.md'));
+  });
+
+  test('rejects invalid task slugs and report suffixes', async () => {
+    await assert.rejects(
+      handleToolCall('start_new_task', { task_slug: 'bad slug' }, toolOptions()),
+      /must not contain space or '\//
+    );
+    await assert.rejects(
+      handleToolCall('start_new_task', { task_slug: 'bad/slug' }, toolOptions()),
+      /must not contain space or '\//
+    );
+    await assert.rejects(
+      handleToolCall('start_new_report_file', { suffix: 'bad slug' }, toolOptions()),
+      /must not contain space or '\//
+    );
+
+    await assert.rejects(
+      handleToolCall('start_new_report_file', { suffix: 'bad/slug' }, toolOptions()),
+      /must not contain space or '\//
+    );
   });
 });

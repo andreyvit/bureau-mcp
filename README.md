@@ -7,7 +7,7 @@ A Model Context Protocol (MCP) server that helps AI agents reliably manage task-
 When using AI subagents for complex workflows, it's useful to have them maintain reports in a structured directory like this:
 
 ```
-_tasks/
+.tasks/
 ├── current -> 2025-10-01-implement-feature
 ├── 2025-10-01-implement-feature/
 │   ├── 001-user-request.md
@@ -32,10 +32,11 @@ Bureau solves this by managing the directory structure and file numbering, while
 ## Features
 
 - **Automatic Task Directory Management** - Creates dated task folders with automatic suffix handling (2025-10-01, 2025-10-01b, 2025-10-01c, etc.)
+- **Bureau Dir Auto-Detection** - Detects `.tasks`, `_tasks`, `.reports`, or `_reports`, and defaults to `.tasks`
 - **Sequential Report Numbering** - Generates next available report file numbers automatically
 - **Current Task Tracking** - Maintains a `current` symlink pointing to the active task
 - **Smart File Listing** - Returns all files if <50, or earliest 20 + latest 30 for efficiency
-- **Recent Tasks** - Lists tasks from the last 30 days
+- **Recent Tasks** - Lists tasks from the last 60 days, backfilled to at least 30 task directories when available
 - **Minimal Dependencies** - Built with only essential packages
 
 ## Installation
@@ -108,7 +109,8 @@ Returns information about the current task.
 ```json
 {
   "task_slug": "implement-feature",
-  "reports_dir": "_tasks/2025-10-01-implement-feature",
+  "task_dir": "2025-10-01-implement-feature",
+  "reports_dir": ".tasks/2025-10-01-implement-feature",
   "report_file_names": ["001-user-request.md", "002-plan.md"]
 }
 ```
@@ -122,25 +124,27 @@ Creates a new task directory and makes it current.
 **Returns:** Same format as `current_task()`
 
 ### `switch_task`
-Switches to an existing task by slug.
+Switches to an existing task by full task dir or by slug.
 
 **Parameters:**
-- `task_slug` (string): Slug of the task to switch to
+- `task_dir` (string, optional): Full task directory name to switch to
+- `task_slug` (string, optional): Slug of the task to switch to
 
 **Returns:** Same format as `current_task()`
 
 ### `list_recent_tasks`
-Lists all tasks from the last 30 days.
+Lists tasks from the last 60 days, backfilled to at least 30 task directories when available.
 
 **Returns:**
 ```json
 {
-  "recent_task_slugs": ["implement-feature", "fix-bug", "refactor"]
+  "recent_task_dirs": ["2025-10-01-implement-feature", "2025-10-01b-fix-bug"],
+  "recent_task_slugs": ["implement-feature", "fix-bug"]
 }
 ```
 
 ### `start_new_report_file`
-Returns the name for the next sequentially numbered report file.
+Returns the name of the next sequentially numbered report file; create or touch this file before calling again to avoid duplicate numbers.
 
 **Parameters:**
 - `suffix` (string): Suffix for the report file (e.g., "code-review")
@@ -148,7 +152,7 @@ Returns the name for the next sequentially numbered report file.
 **Returns:**
 ```json
 {
-  "report_file_to_create": "_tasks/2025-10-01-implement-feature/003-code-review.md"
+  "report_file_to_create": ".tasks/2025-10-01-implement-feature/003-code-review.md"
 }
 ```
 
@@ -169,8 +173,8 @@ Returns the name for the next sequentially numbered report file.
    - Writes new content
 
 4. **Agent switches between tasks:**
-   - Calls `list_recent_tasks()` to see options
-   - Calls `switch_task({task_slug: "fix-bug"})` to change tasks
+   - Calls `list_recent_tasks()` to see recent task directories
+   - Calls `switch_task({task_dir: "2025-10-01b-fix-bug"})` or `switch_task({task_slug: "fix-bug"})`
 
 ## Task Directory Naming
 
@@ -182,6 +186,17 @@ Task directories follow the pattern: `YYYY-MM-DDn-slug-slug-slug`
 - ...continuing through `y`: `2025-10-01y-task-25`
 - 26th+ tasks use numeric suffix: `2025-10-01z026-task-26`, `2025-10-01z027-task-27`, etc.
 - Up to 1000 tasks per day
+
+## Bureau Dir Selection
+
+By default, Bureau auto-detects an existing tasks dir in this order:
+
+- `.tasks`
+- `_tasks`
+- `.reports`
+- `_reports`
+
+If more than one exists, Bureau prefers the one that already has a `current` symlink and existing task directories. You can override auto-detection by setting `BUREAU_DIR` to a relative or absolute path before starting the server.
 
 ## Development
 
